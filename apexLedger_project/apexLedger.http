@@ -1,0 +1,6 @@
+@apexLedger_HostAddress = http://localhost:5056
+
+GET {{apexLedger_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
