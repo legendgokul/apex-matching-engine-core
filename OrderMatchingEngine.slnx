@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="OrderMatchingEngine/OrderMatchingEngine.csproj" />
+  <Project Path="OrderMatchingEngine_test/OrderMatchingEngine_test.csproj" />
+<Project Path="Benchmark_OrderMatchingEngine/Benchmark_OrderMatchingEngine.csproj" />
+</Solution>

@@ -1,0 +1,10 @@
+OrderMatchingEngine_test/bin/
+OrderMatchingEngine_test/obj/
+OrderMatchingEngine/bin/
+OrderMatchingEngine/obj/
+Benchmark_OrderMatchingEngine/bin/
+Benchmark_OrderMatchingEngine/obj/ 
+
+.vs
+
+/Benchmark_OrderMatchingEngine/BenchmarkDotNet.Artifacts
