@@ -11,7 +11,7 @@ namespace OrderMatchingEngine.Models
         public long buyid { get; set; }
         public long sellid { get; set; }
         public long quantity { get; set; }
-        public long price_limit { get; set; }
+        public long price { get; set; }
         public DateTime createdon { get; set; }
 
     }

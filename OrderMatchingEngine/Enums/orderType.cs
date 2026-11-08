@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace OrderMatchingEngine.Enums
 {
-    internal enum orderType
+    public enum orderType
     {
         buy,
         sell
