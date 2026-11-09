@@ -10,22 +10,21 @@ namespace OrderMatchingEngine_test
     {
      
         /*
-        Determinism tests
-        This is one of the most valuable tests for your project.
+            Determinism tests
+            This is one of the most valuable tests for your project.
 
-        The idea:
-        1. Generate 10,000 commands using a fixed random seed.
-        2. Create two fresh matching engine instances.
-        3. Feed the exact same commands to both engines.
-        4. Capture every returned event.
-        5. Compare the complete event sequences.
-
+            The idea:
+            1. Generate 10,000 commands using a fixed random seed.
+            2. Create two fresh matching engine instances.
+            3. Feed the exact same commands to both engines.
+            4. Capture every returned event.
+            5. Compare the complete event sequences.
         */
 
 
         public static TheoryData<int, int> GenerationCount => new TheoryData<int, int>
         {
-            //{ 100, 12345 },
+            { 100, 12345 },
             { 1000000, 23456 }
         };
 
@@ -77,7 +76,7 @@ namespace OrderMatchingEngine_test
                     );
 
                     pt1++;
-                    Console.WriteLine(String.Join(Environment.NewLine, buyResponse1));
+                    // Console.WriteLine(String.Join(Environment.NewLine, buyResponse1));
                 }
                 else
                 {
@@ -90,9 +89,138 @@ namespace OrderMatchingEngine_test
                     );
 
                     pt2++;
-                    Console.WriteLine(String.Join(Environment.NewLine, sellResponse1));
+                    // Console.WriteLine(String.Join(Environment.NewLine, sellResponse1));
+                }
+            }
+
+
+
+        }
+
+
+        [Theory]
+        [MemberData(nameof(GenerationCount))]
+        public void CancelOrder_DeterministicTest_Buy(int OrderCount,  int seed)
+        {
+            OrderBook _firstinstance = new();
+            OrderBook _secondInstance = new();
+
+            // 1.Lets generate the input 
+            var buyorderList = new List<OrderInfo>(OrderCount);
+            var cancelOrderList = new List<int>(OrderCount);
+
+
+            var rand = new Random(seed);
+            var dataTime = DateTime.Now; // this is fine, since it is not used for logic processing
+
+            for (int i = 1; i <= OrderCount; i++)
+            {
+                var buyOrder = new OrderInfo(i, rand.Next(100, 120), rand.Next(50, 150), orderType.buy);
+                var cancelOrder = rand.Next(0,OrderCount);
+
+                buyorderList.Add(buyOrder);
+                cancelOrderList.Add(cancelOrder);
+            }
+
+            // ACT
+            // Loop through and hit both the Engine.
+            int pt1 = 0;
+            int pt2 = 0;
+            while( pt1 < OrderCount || pt2 < OrderCount)
+            {
+                var choice = rand.Next(0, 2);
+
+                if (pt1 < OrderCount && (choice == 0 || pt2 >= OrderCount))
+                {
+                    var buyResponse1 = _firstinstance.CreateOrder(buyorderList[pt1], dataTime);
+                    var buyResponse2 = _secondInstance.CreateOrder(buyorderList[pt1], dataTime);
+
+                    Assert.True(
+                        buyResponse1.SequenceEqual(buyResponse2),
+                        $"Buy mismatch at index {pt1}, seed: {seed}"
+                    );
+
+                    pt1++;
+                    // Console.WriteLine(String.Join(Environment.NewLine, buyResponse1));
+                }
+                else
+                {
+                    var cancelResponse1 = _firstinstance.CancelOrder(cancelOrderList[pt2]);
+                    var cancelResponse2 = _secondInstance.CancelOrder(cancelOrderList[pt2]);
+
+                    Assert.True(
+                        cancelResponse1.Equals(cancelResponse2),
+                        $"cancel mismatch at index {pt2}, seed: {seed}"
+                    );
+
+                    pt2++;
+                    // Console.WriteLine(cancelResponse1);
                 }
             }
         }
+
+
+        [Theory]
+        [MemberData(nameof(GenerationCount))]
+        public void CancelOrder_DeterministicTest_Sell(int OrderCount, int seed)
+        {
+            OrderBook _firstinstance = new();
+            OrderBook _secondInstance = new();
+
+            // 1.Lets generate the input 
+            var sellorderList = new List<OrderInfo>(OrderCount);
+            var cancelOrderList = new List<int>(OrderCount);
+
+
+            var rand = new Random(seed);
+            var dataTime = DateTime.Now; // this is fine, since it is not used for logic processing
+
+            for (int i = 1; i <= OrderCount; i++)
+            {
+                var sellOrder = new OrderInfo(i, rand.Next(100, 120), rand.Next(50, 150), orderType.sell);
+                var cancelOrder = rand.Next(0, OrderCount);
+
+                sellorderList.Add(sellOrder);
+                cancelOrderList.Add(cancelOrder);
+            }
+
+            // ACT
+            // Loop through and hit both the Engine.
+            int pt1 = 0;
+            int pt2 = 0;
+            while (pt1 < OrderCount || pt2 < OrderCount)
+            {
+                var choice = rand.Next(0, 2);
+
+                if (pt1 < OrderCount && (choice == 0 || pt2 >= OrderCount))
+                {
+                    var buyResponse1 = _firstinstance.CreateOrder(sellorderList[pt1], dataTime);
+                    var buyResponse2 = _secondInstance.CreateOrder(sellorderList[pt1], dataTime);
+
+                    Assert.True(
+                        buyResponse1.SequenceEqual(buyResponse2),
+                        $"sell mismatch at index {pt1}, seed: {seed}"
+                    );
+
+                    pt1++;
+                    // Console.WriteLine(String.Join(Environment.NewLine, buyResponse1));
+                }
+                else
+                {
+                    var cancelResponse1 = _firstinstance.CancelOrder(cancelOrderList[pt2]);
+                    var cancelResponse2 = _secondInstance.CancelOrder(cancelOrderList[pt2]);
+
+                    Assert.True(
+                        cancelResponse1.Equals(cancelResponse2),
+                        $"cancel mismatch at index {pt2}, seed: {seed}"
+                    );
+
+                    pt2++;
+                    // Console.WriteLine(cancelResponse1);
+                }
+            }
+        }
+
+
     }
 }
