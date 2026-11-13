@@ -6,9 +6,8 @@ using System.Threading.Tasks;
 
 namespace OrderMatchingEngine.Enums
 {
-    public enum orderType
+    public enum EventType : byte
     {
-        buy,
-        sell
+        OrderAccepted, TradeExecuted, OrderCancelled, OrderRejected
     }
 }

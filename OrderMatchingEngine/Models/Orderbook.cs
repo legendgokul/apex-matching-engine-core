@@ -1,4 +1,6 @@
 ﻿using OrderMatchingEngine.Enums;
+using System.Net.Http.Headers;
+using System.Security.Cryptography.X509Certificates;
 
 //limit order book
 namespace OrderMatchingEngine.Models
@@ -17,18 +19,21 @@ namespace OrderMatchingEngine.Models
 
     internal class PriceLevel
     {
-        public LinkedListNode Head  { get; set; }
+        public LinkedListNode Head { get; set; }
         public LinkedListNode Tail { get; set; }
 
         public PriceLevel()
         {
-            Head  = new LinkedListNode();
-            Tail = Head ;
+            Head = new LinkedListNode();
+            Tail = Head;
         }
     }
 
     internal class OrderBook
     {
+        private long _nextEventSeq = 1;
+        private long NextSeq() => _nextEventSeq++;
+
         private SortedDictionary<long, PriceLevel> buyLedger;
         private SortedDictionary<long, PriceLevel> sellLedger;
         private Dictionary<long, LinkedListNode> orderLookup;
@@ -43,107 +48,139 @@ namespace OrderMatchingEngine.Models
 
         }
 
+        public List<EngineEvent> ProcessOrder(OrderRequest order)
+        {
+            if (order.RequestType == RequestType.CreateOrder)
+            {
+                return CreateOrder(order);
+            }
+            else
+            {
+                return new List<EngineEvent>() { CancelOrder(order) };
+            }
+        }
+
         // methods to add unit to ledger
-        public List<EngineEvent> CreateOrder(OrderInfo order, DateTime currentTime)
+        private List<EngineEvent> CreateOrder(OrderRequest orderRequest)
         {
             var EventList = new List<EngineEvent>();
 
             // validation to reject the order. 
-            if (order.quantity <= 0)
-                return new List<EngineEvent>() { new OrderRejected(order.id, "Invalid Quantity") };
-            
-            if (order.price <= 0)
-                return new List<EngineEvent>() { new OrderRejected(order.id, "Invalid Price") };
 
-            if (order.id <= 0)
-                return new List<EngineEvent>() { new OrderRejected(order.id, "Invalid Order ID") };
-
-            if (orderLookup.ContainsKey(order.id))
-                return new List<EngineEvent>() { new OrderRejected(order.id, "Order Already Exists") };
-
-            if( order.Side != orderType.buy && order.Side != orderType.sell)
-                return new List<EngineEvent>() { new OrderRejected(order.id, "Invalid order type") };
-
-            EventList.Add(new OrderAccepted(order.id));
-
-            var Trades = MatchBooking(ref order, currentTime);
-
-            foreach (var t in Trades)
+            if (orderRequest.Id <= 0)
             {
-                EventList.Add(new TradeExecuted(t.buyid, t.sellid, t.price, t.quantity));
+                EventList.Add(new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.InvalidOrderId, orderRequest.CurrentDateTime));
+                return EventList;
             }
 
-            if (order.remainingQuantity > 0)
+            if (orderLookup.ContainsKey(orderRequest.Id))
             {
-                if (order.Side == orderType.buy)
-                {        
-                    AddToBuyledger(order);
-                }
-                else if (order.Side == orderType.sell)
+                EventList.Add(new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.DuplicateOrderId, orderRequest.CurrentDateTime));
+                return EventList;
+            }
+
+            if (orderRequest.Quantity <= 0)
+            {
+                EventList.Add(new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.InvalidQuantity, orderRequest.CurrentDateTime));
+                return EventList;
+            }
+
+            if (orderRequest.Price <= 0)
+            {
+                EventList.Add(new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.InvalidPrice, orderRequest.CurrentDateTime));
+                return EventList;
+            }
+
+            if (orderRequest.Side != OrderSide.buy && orderRequest.Side != OrderSide.sell)
+            {
+                EventList.Add(new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.InvalidSide, orderRequest.CurrentDateTime));
+                return EventList;
+            }
+
+            EventList.Add(
+                new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id, orderRequest.Side, orderRequest.CurrentDateTime));
+
+
+            EventList.AddRange(MatchBooking(ref orderRequest));
+
+            if (orderRequest.RemainingQuantity > 0)
+            {
+                if (orderRequest.Side == OrderSide.buy)
                 {
-                    AddToSellledger(order);
+                    AddToBuyledger(orderRequest);
+                }
+                else if (orderRequest.Side == OrderSide.sell)
+                {
+                    AddToSellledger(orderRequest);
                 }
             }
-           
+
             return EventList;
         }
 
-        public EngineEvent CancelOrder(long id)
+        private EngineEvent CancelOrder(OrderRequest orderRequest)
         {
-            if (id <= 0)
-                return new InvalidRequest(id, "Invalid orderid");
 
-            if (!orderLookup.TryGetValue(id, out var order))
-                return new InvalidRequest(id, "Order not found");
+            if (orderRequest.Id <= 0)
+            {
+                return new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.InvalidOrderId, orderRequest.CurrentDateTime);
 
-            return RemoveOrder(order);
+            }
+
+            if (!orderLookup.TryGetValue(orderRequest.Id, out var order))
+            {
+                return new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id,
+                                        RejectReason.OrderNotFound, orderRequest.CurrentDateTime);
+            }
+
+            UnlinkNode(order);
+
+            return new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id, order.Data.RemainingQuantity,
+                                        order.Data.Side, orderRequest.CurrentDateTime);
         }
 
-        private List<Trade> MatchBooking(ref OrderInfo order, DateTime currentTime)
+        private List<EngineEvent> MatchBooking(ref OrderRequest orderRequest)
         {
-            var oppositeLedger = (order.Side == orderType.sell)? buyLedger : sellLedger;
-            var result = new List<Trade>();
+            var oppositeLedger = (orderRequest.Side == OrderSide.sell) ? buyLedger : sellLedger;
+            var result = new List<EngineEvent>();
 
-
-            while(order.remainingQuantity > 0 && oppositeLedger.Count > 0)
+            while (orderRequest.RemainingQuantity > 0 && oppositeLedger.Count > 0)
             {
                 // pick the first price
-                var price = oppositeLedger.First().Key;
+                var FirstItem = oppositeLedger.First();
 
                 // check if we can use this price
-                bool canUse = (order.Side == orderType.buy) ? (order.price >= price) : (order.price <= price);
+                bool canUse = (orderRequest.Side == OrderSide.buy) ? (orderRequest.Price >= FirstItem.Key) : (orderRequest.Price <= FirstItem.Key);
 
-                if(!canUse)
+                if (!canUse)
                 {
                     break;
                 }
 
-                if(!oppositeLedger.TryGetValue(price, out var level))
+                var restingOrder = FirstItem.Value.Head.Next;
+
+                if (restingOrder != null)
                 {
-                    break; 
-                }
+                    var resultingQuant = Math.Min(orderRequest.RemainingQuantity, restingOrder.Data.RemainingQuantity);
 
-                var restingOrder = level.Head.Next;
+                    orderRequest.RemainingQuantity -= resultingQuant;
+                    restingOrder.Data.RemainingQuantity -= resultingQuant;
 
-                if(restingOrder != null)
-                { 
-                    var resultingQuant = Math.Min(order.remainingQuantity, restingOrder.Data.remainingQuantity);
 
-                    order.remainingQuantity -= resultingQuant;
-                    restingOrder.Data.remainingQuantity -= resultingQuant;
+                    result.Add(
+                        new EngineEvent(NextSeq(), orderRequest.CommandId, orderRequest.Id, restingOrder.Data.Id,
+                        FirstItem.Key, resultingQuant, orderRequest.Side, orderRequest.CurrentDateTime)
+                    );
 
-                    var trade = new Trade();
-                    trade.buyid = (order.Side == orderType.buy) ? order.id : restingOrder.Data.id;
-                    trade.sellid = (order.Side == orderType.sell) ? order.id : restingOrder.Data.id;
-                    trade.price = price;
-                    trade.quantity = resultingQuant;
-                    trade.createdon = currentTime;
-
-                    result.Add(trade);
-
-                    if(restingOrder.Data.remainingQuantity < 1)
+                    if (restingOrder.Data.RemainingQuantity < 1)
                     {
-                        RemoveOrder(restingOrder);
+                        UnlinkNode(restingOrder);
                     }
                 }
                 else
@@ -151,72 +188,87 @@ namespace OrderMatchingEngine.Models
                     break;
                 }
             }
-
             return result;
         }
 
-        private void AddToBuyledger(OrderInfo data)
+        private void AddToBuyledger(OrderRequest orderRequest)
         {
-            if (!buyLedger.TryGetValue(data.price, out var level))
+            if (!buyLedger.TryGetValue(orderRequest.Price, out var level))
             {
                 level = new PriceLevel();
-                buyLedger[data.price] = level;
+                buyLedger[orderRequest.Price] = level;
             }
 
             var TailNode = level.Tail;
-            var newNode = new LinkedListNode(data);
+            var newNode = new LinkedListNode(new OrderInfo()
+            {
+                Id = orderRequest.Id,
+                Price = orderRequest.Price,
+                RemainingQuantity = orderRequest.RemainingQuantity,
+                Quantity = orderRequest.Quantity,
+                Side = orderRequest.Side
+            });
+
             TailNode.Next = newNode;
             newNode.Prev = TailNode;
 
             // update Tail tracker
             level.Tail = newNode;
 
-            orderLookup[data.id] = newNode;
+            orderLookup[orderRequest.Id] = newNode;
 
         }
 
-        // first node will always be default 
-        private void AddToSellledger(OrderInfo data)
-        { 
-            if(!sellLedger.TryGetValue(data.price, out var level))
+        private void AddToSellledger(OrderRequest orderRequest)
+        {
+            if (!sellLedger.TryGetValue(orderRequest.Price, out var level))
             {
                 level = new PriceLevel();
-                sellLedger[data.price] = level;
+                sellLedger[orderRequest.Price] = level;
             }
 
             var TailNode = level.Tail;
-            var newNode = new LinkedListNode(data);
+            var newNode = new LinkedListNode(new OrderInfo()
+            {
+                Id = orderRequest.Id,
+                Price = orderRequest.Price,
+                RemainingQuantity = orderRequest.RemainingQuantity,
+                Quantity = orderRequest.Quantity,
+                Side = orderRequest.Side
+            });
+
             TailNode.Next = newNode;
             newNode.Prev = TailNode;
 
             // update Tail tracker
             level.Tail = newNode;
 
-            orderLookup[data.id] = newNode;
+            orderLookup[orderRequest.Id] = newNode;
         }
 
-        private EngineEvent RemoveOrder(LinkedListNode order)
-        {   
-            var price = order.Data.price;
-            var id = order.Data.id;
-            var remaining = order.Data.remainingQuantity;
+        private void UnlinkNode(LinkedListNode order)
+        {
+            var price = order.Data.Price;
+            var Id = order.Data.Id;
 
             // Remove empty ledger entries 
-            var ledger = (order.Data.Side == orderType.buy) ? buyLedger : sellLedger;
+            var ledger = (order.Data.Side == OrderSide.buy)
+                ? buyLedger
+                : sellLedger;
 
             if (!ledger.TryGetValue(price, out var level))
-                return new InvalidRequest(id,"order not found"); // Defensive consistency check
-
+                throw new InvalidOperationException("Order book is inconsistent."); // Defensive consistency check
 
             // Unlink previous node
             if (order.Prev != null)
                 order.Prev.Next = order.Next;
 
-            // Unlink next node (if it exists)
+            // Unlink next node 
             if (order.Next != null)
                 order.Next.Prev = order.Prev;
 
-            if (level.Tail == order) // checking if we are removing Tail
+            // check if we are removing Tail
+            if (level.Tail == order)
             {
                 level.Tail = order.Prev;
             }
@@ -225,15 +277,65 @@ namespace OrderMatchingEngine.Models
             order.Prev = null;
             order.Next = null;
 
+            // Remove empty price level
             if (level.Head.Next == null)
             {
                 ledger.Remove(price);
             }
 
             // Remove from lookup
-            orderLookup.Remove(id);
+            orderLookup.Remove(Id);
+        }
 
-            return new OrderCancelled(id, remaining);
+        internal CurrentSnapshot SnapShot()
+        {
+            var lookup = new restingOrder[orderLookup.Count];
+            int index = 0;
+            foreach (var item in orderLookup.Values)
+            {
+                lookup[index++] = new restingOrder(
+                        item.Data.Id, item.Data.Price, item.Data.RemainingQuantity, item.Data.Side
+                        );
+            }
+
+            // Dictionary Order can be unpredictable with future change so sorting it for safety
+            Array.Sort(lookup, Comparer<restingOrder>.Create((a, b) => a.Id.CompareTo(b.Id)));
+
+            var buyerSide = new List<restingOrder>();
+            index = 0;
+            foreach (var item in buyLedger.Values)
+            {
+                var head = item.Head.Next; //skipping starting demmy node
+
+                while (head != null)
+                {
+                    buyerSide.Add(new restingOrder(head.Data.Id,
+                        head.Data.Price,
+                        head.Data.RemainingQuantity,
+                        head.Data.Side));
+
+                    head = head.Next;
+                }
+            }
+
+            var sellerSide = new List<restingOrder>();
+            index = 0;
+            foreach (var item in sellLedger.Values)
+            {
+                var head = item.Head.Next; //skipping starting demmy node
+
+                while (head != null)
+                {
+                    sellerSide.Add(new restingOrder(head.Data.Id,
+                        head.Data.Price,
+                        head.Data.RemainingQuantity,
+                        head.Data.Side));
+
+                    head = head.Next;
+                }
+            }
+
+            return new CurrentSnapshot(buyerSide, sellerSide, lookup);
         }
 
     }
